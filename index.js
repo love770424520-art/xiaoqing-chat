@@ -4,31 +4,34 @@ import fetch from "node-fetch";
 const app = express();
 app.use(express.json());
 
-// ✅ 從 Railway 變數拿 LINE token（你已經在 Railway 設好了）
-const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+// ====== LINE 金鑰（從 Railway 變數讀）======
+const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 
-// ✅ LINE Webhook 接收（一定要是 /webhook）
+// ====== 測試首頁（網址打開會看到）======
+app.get("/", (req, res) => {
+  res.send("小晴已上線 💖");
+});
+
+// ====== LINE Webhook 接收 ======
 app.post("/webhook", async (req, res) => {
-  console.log("收到 LINE 訊息：", JSON.stringify(req.body, null, 2));
+  console.log("收到 LINE webhook：", JSON.stringify(req.body, null, 2));
 
   const event = req.body?.events?.[0];
-
-  // LINE 會送很多種類事件，非文字訊息就直接回 200
-  if (!event || event.type !== "message" || event.message.type !== "text") {
+  if (!event || event.type !== "message") {
     return res.sendStatus(200);
   }
 
   const replyToken = event.replyToken;
   const userText = event.message.text;
 
-  const replyMessage = {
+  const replyBody = {
     replyToken,
     messages: [
       {
         type: "text",
-        text: `小晴收到你說的：「${userText}」💖`,
-      },
-    ],
+        text: `小晴收到你說的：「${userText}」💖`
+      }
+    ]
   };
 
   try {
@@ -36,27 +39,20 @@ app.post("/webhook", async (req, res) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${LINE_TOKEN}`,
+        Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`
       },
-      body: JSON.stringify(replyMessage),
+      body: JSON.stringify(replyBody)
     });
 
-    const t = await r.text();
-    console.log("LINE reply status:", r.status, t);
-  } catch (e) {
-    console.log("Reply error:", e);
+    console.log("LINE 回傳狀態:", r.status);
+  } catch (err) {
+    console.error("回覆失敗:", err);
   }
 
-  // ✅ 一定要回 200，LINE 才會覺得成功
   res.sendStatus(200);
 });
 
-// ✅ 首頁（你用瀏覽器打開 Railway 網址會看到這句，代表服務活著）
-app.get("/", (req, res) => {
-  res.send("小晴已上線 💖");
-});
-
-// ✅ Railway 會給 PORT，不能寫死 3000
+// ====== Railway 一定要用 PORT ======
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
