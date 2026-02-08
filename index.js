@@ -177,4 +177,151 @@ function maybeCreateEvent(userId, userText) {
 
   if (hasTomorrow && hasEventVerb) {
     const due = new Date();
-    due.set
+    due.setDate(due.getDate() + 1);
+    due.setHours(20, 30, 0, 0); // 明天晚上 8:30 回訪（很像真人）
+
+    mem.events.push({
+      dueAt: due.getTime(),
+      text: userText.slice(0, 60),
+      createdAt: nowTs(),
+      done: false
+    });
+
+    updateUserMem(userId, { events: mem.events });
+  }
+}
+
+// ====== OpenAI（Responses API）=====
+// OpenAI 官方建議用「把對話狀態帶在每次請求」來維持連貫:contentReference[oaicite:1]{index=1}
+async function callOpenAI(userId, userText) {
+  const injected = buildInjectedMemory(userId);
+
+  const input = [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: injected },
+    {
+      role: "user",
+      content: `（請先用一句情緒反應，再回內容）
+使用者說：${userText}`.trim()
+    }
+  ];
+
+  const resp = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${OPENAI_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: "gpt-4.1-mini",
+      input
+    })
+  });
+
+  const data = await resp.json();
+
+  const text =
+    data?.output_text ||
+    data?.output?.[0]?.content?.[0]?.text ||
+    "……我剛剛在想啦";
+
+  return String(text).slice(0, 800);
+}
+
+// ====== LINE reply（被動回覆）=====
+async function replyToLine(replyToken, text) {
+  await fetch("https://api.line.me/v2/bot/message/reply", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${LINE_TOKEN}`
+    },
+    body: JSON.stringify({
+      replyToken,
+      messages: [{ type: "text", text }]
+    })
+  });
+}
+
+// ====== Phase 1：延遲型主動（補一句）=====
+function scheduleDelayedFollowUp(userId) {
+  const mem = getUserMem(userId);
+
+  // 一天最多一次主動補一句
+  if (mem.lastProactiveAt && nowTs() - mem.lastProactiveAt < 24 * 60 * 60 * 1000) return;
+
+  // 30% 機率
+  if (Math.random() > 0.3) return;
+
+  const delay = 5 * 60 * 1000 + Math.random() * 25 * 60 * 1000; // 5～30 分鐘
+
+  setTimeout(async () => {
+    const latest = getUserMem(userId);
+
+    // 使用者又說話就取消
+    if (nowTs() - latest.lastSeenAt < delay - 1000) return;
+
+    const followUps = [
+      "欸…我剛剛一直在想你那句",
+      "突然想到你剛說的那個",
+      "我可能想太多啦，但那句真的有點重",
+      "剛剛本來要算了，但還是想說",
+      "不知道為什麼，腦袋一直轉你那句"
+    ];
+    const text = followUps[Math.floor(Math.random() * followUps.length)];
+
+    await sendPushMessage(userId, text);
+    updateUserMem(userId, { lastProactiveAt: nowTs() });
+  }, delay);
+}
+
+// ====== 首頁 ======
+app.get("/", (req, res) => {
+  res.send("小晴 Phase 2 已上線 💖");
+});
+
+// ====== LINE Webhook ======
+app.post("/webhook", async (req, res) => {
+  try {
+    const event = req.body.events?.[0];
+    if (!event || event.type !== "message") return res.sendStatus(200);
+
+    const userId = event.source?.userId;
+    const replyToken = event.replyToken;
+
+    if (event.message?.type !== "text") {
+      await replyToLine(replyToken, "欸…你先打字啦😗");
+      return res.sendStatus(200);
+    }
+
+    const userText = event.message.text || "";
+
+    // Phase 2：更新記憶（摘要 + 事件）
+    updateStateSummarySimple(userId, userText);
+    maybeCreateEvent(userId, userText);
+
+    // 產生 AI 回覆
+    const aiText = await callOpenAI(userId, userText);
+
+    // 真人回覆延遲：10～20 秒
+    const delay = 10000 + Math.random() * 10000;
+    await sleep(delay);
+
+    // 正式回覆
+    await replyToLine(replyToken, aiText);
+
+    // Phase 1：延遲型主動（補一句）
+    scheduleDelayedFollowUp(userId);
+
+  } catch (err) {
+    console.error("Webhook 錯誤：", err);
+  }
+
+  res.sendStatus(200);
+});
+
+// ====== PORT ======
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("Server running on port", PORT);
+});
