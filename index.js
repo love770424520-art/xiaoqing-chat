@@ -3,57 +3,57 @@ import express from "express";
 const app = express();
 app.use(express.json());
 
-// 讀 Railway 變數（你已經在 Railway Variables 加好了）
-const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+// LINE Token（從 Railway Variables 來）
+const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 
-// Railway 健康檢查：打開網址會看到這句
+// 首頁測試用
 app.get("/", (req, res) => {
-  res.status(200).send("小晴已上線 💖");
+  res.send("小晴已上線 💖");
 });
 
-// LINE Webhook：LINE 會 POST 這個路徑
+// LINE Webhook
 app.post("/webhook", async (req, res) => {
   try {
-    // 先立刻回 200，避免 LINE timeout
-    res.sendStatus(200);
+    console.log("收到 LINE 訊息：", JSON.stringify(req.body, null, 2));
 
-    const event = req.body?.events?.[0];
-    if (!event || event.type !== "message" || event.message?.type !== "text") {
-      return;
+    const event = req.body.events?.[0];
+    if (!event || event.type !== "message") {
+      return res.sendStatus(200);
     }
 
     const replyToken = event.replyToken;
     const userText = event.message.text;
 
-    // 沒 token 就直接記錄（方便你在 Railway Logs 看）
-    if (!LINE_CHANNEL_ACCESS_TOKEN) {
-      console.log("❌ 沒有讀到 LINE_CHANNEL_ACCESS_TOKEN（Railway Variables 沒設定或沒套用）");
-      return;
-    }
-
-    const payload = {
+    const replyMessage = {
       replyToken,
-      messages: [{ type: "text", text: `小晴收到你說的：「${userText}」💖` }],
+      messages: [
+        {
+          type: "text",
+          text: `小晴收到你說的：「${userText}」💖`
+        }
+      ]
     };
 
     const r = await fetch("https://api.line.me/v2/bot/message/reply", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+        "Authorization": `Bearer ${LINE_TOKEN}`
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(replyMessage)
     });
 
     const t = await r.text();
-    console.log("✅ 回覆結果", r.status, t);
-  } catch (e) {
-    console.log("❌ webhook error:", e);
+    console.log("LINE 回覆結果：", r.status, t);
+  } catch (err) {
+    console.error("錯誤：", err);
   }
+
+  res.sendStatus(200);
 });
 
-// Railway 會給 PORT
+// Railway 指定 PORT
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("✅ Server running on", PORT);
+  console.log("Server running on port", PORT);
 });
