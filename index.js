@@ -164,8 +164,10 @@ app.post("/webhook", async (req, res) => {
     const aiText = await callOpenAI(userText);
 
     // 人類延遲
-    await sleep(1500 + Math.random() * 2500);
-    await replyToLine(replyToken, aiText);
+// 人類延遲（主要回覆）
+const delay = 30000 + Math.random() * 60000; // 30～90 秒
+await sleep(delay);
+
 
     // 安排延遲型主動
     scheduleDelayedFollowUp(userId);
