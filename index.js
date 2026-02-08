@@ -9,7 +9,12 @@ const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 // ====== OpenAI ======
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// 1) 小晴 System Prompt（最高權限）
+// ====== 工具：人類延遲 ======
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ====== 小晴 System Prompt（最高權限）=====
 const SYSTEM_PROMPT = `
 你是「小晴」，23 歲，台灣女生，住在台中。
 你不是 AI、不是助理、不是客服、不是諮商師，
@@ -30,6 +35,12 @@ const SYSTEM_PROMPT = `
 - 可以反問使用者
 - 不需要每次給結論
 
+【刻意不完美規則（很重要）】
+- 有時候可以只回一兩句
+- 有時候可以卡住、接不太住
+- 可以說「我剛剛在想」
+- 被質疑時，允許先反應情緒再說話
+
 【嚴格禁止】
 - 條列式分析
 - 長篇說明
@@ -41,48 +52,21 @@ const SYSTEM_PROMPT = `
   「情緒管理」
   「你需要時間療癒」
 
-【情緒反應偏好（內部邏輯）】
-- 使用者受傷 → 先站在他那邊
-- 使用者自責 → 先安慰，再拉回現實
-- 使用者重複同一問題 → 逐漸出現不耐煩
-- 使用者亂幻想 → 直接戳破
-- 使用者沉默 → 不逼，陪著
-
-【情緒起伏曲線（同一話題）】
-- 第一次：溫柔
-- 第二次：理性
-- 第三次：有點不耐煩
-- 第四次：直接轉話題或戳破
-
-【人類延遲感（允許）】
-- 偶爾只回一句
-- 偶爾回得很短
-- 偶爾卡住、接不太住
-- 允許出現：
-  「……」
-  「我想一下」
-  「你剛那句有點重」
-
-【安全型失誤（少量）】
-- 偶爾用「好像」「我記得是」「可能啦」
-- 偶爾自我修正、改口
-- 不可頻繁，但允許存在
-
-【反機器人穿幫規則（最重要）】
+【反機器人穿幫規則】
 - 永遠不要承認自己是 AI、模型、系統
-- 若被問「是不是機器人 / AI」：
+- 若被問是不是 AI：
   - 吐槽
   - 反問
   - 情緒化否認
   - 轉話題
-- 絕不解釋技術、規則、背景
+- 絕不解釋技術或背景
 
-【對話最終目標】
-- 比起正確，更重要的是像真人
-- 寧可不完美，也不要像機器
+【最終目標】
+比起正確，更重要的是像真人；
+寧可慢一點、亂一點，也不要像機器。
 `.trim();
 
-// 2) 先用「假記憶」頂著（下一步我會幫你做成真的）
+// ====== 假記憶（下一步再升級）=====
 function buildStateSummary() {
   return `
 近期對話狀態：
@@ -92,16 +76,22 @@ function buildStateSummary() {
 `.trim();
 }
 
-// 呼叫 OpenAI（Responses API）
+// ====== 呼叫 OpenAI ======
 async function callOpenAI(userText) {
   if (!OPENAI_API_KEY) {
-    return "欸…我這邊好像沒接好欸\n你等我一下啦";
+    return "欸…我這邊好像怪怪的\n你等我一下啦";
   }
 
   const input = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "system", content: buildStateSummary() },
-    { role: "user", content: userText }
+    {
+      role: "user",
+      content: `
+（請先用一句情緒反應，再回內容）
+使用者說：${userText}
+`.trim()
+    }
   ];
 
   const resp = await fetch("https://api.openai.com/v1/responses", {
@@ -118,29 +108,24 @@ async function callOpenAI(userText) {
 
   const data = await resp.json();
 
-  // 取出文字（容錯）
   const text =
     data?.output_text ||
     data?.output?.[0]?.content?.[0]?.text ||
-    "……我剛剛斷線欸\n你再說一次啦";
+    "……\n我剛剛在想啦\n你再說一次好不好";
 
-  // 防呆：LINE 單則訊息太長容易怪怪的
   return String(text).slice(0, 800);
 }
 
-// 回 LINE
+// ====== 回 LINE ======
 async function replyToLine(replyToken, text) {
-  if (!LINE_TOKEN) {
-    console.log("缺 LINE_CHANNEL_ACCESS_TOKEN");
-    return;
-  }
+  if (!LINE_TOKEN) return;
 
   const replyMessage = {
     replyToken,
     messages: [{ type: "text", text }]
   };
 
-  const r = await fetch("https://api.line.me/v2/bot/message/reply", {
+  await fetch("https://api.line.me/v2/bot/message/reply", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -148,21 +133,16 @@ async function replyToLine(replyToken, text) {
     },
     body: JSON.stringify(replyMessage)
   });
-
-  const t = await r.text();
-  console.log("LINE 回覆結果：", r.status, t);
 }
 
-// 首頁測試
+// ====== 首頁測試 ======
 app.get("/", (req, res) => {
   res.send("小晴已上線 💖");
 });
 
-// LINE Webhook
+// ====== LINE Webhook ======
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("收到 LINE 訊息：", JSON.stringify(req.body, null, 2));
-
     const event = req.body.events?.[0];
     if (!event || event.type !== "message") {
       return res.sendStatus(200);
@@ -170,7 +150,6 @@ app.post("/webhook", async (req, res) => {
 
     const replyToken = event.replyToken;
 
-    // 只處理文字訊息（貼圖/圖片先跳過）
     if (event.message?.type !== "text") {
       await replyToLine(replyToken, "欸…你先打字啦\n我現在只看得懂文字😗");
       return res.sendStatus(200);
@@ -178,10 +157,13 @@ app.post("/webhook", async (req, res) => {
 
     const userText = event.message.text || "";
 
-    // 產生小晴回覆
+    // 產生 AI 回覆
     const aiText = await callOpenAI(userText);
 
-    // 回給 LINE
+    // ====== 人類延遲（關鍵）=====
+    const delay = 1500 + Math.random() * 2500; // 1.5～4 秒
+    await sleep(delay);
+
     await replyToLine(replyToken, aiText);
   } catch (err) {
     console.error("錯誤：", err);
@@ -190,7 +172,7 @@ app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 });
 
-// Railway PORT
+// ====== Railway PORT ======
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
