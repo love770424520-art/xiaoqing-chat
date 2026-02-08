@@ -15,7 +15,7 @@ function sleep(ms) {
 }
 
 // ====== 暫存使用者狀態（Phase 1 用記憶體即可）=====
-const userMemory = new Map(); 
+const userMemory = new Map();
 // userId => { lastText, lastAt, lastProactiveAt }
 
 // ====== 小晴 System Prompt ======
@@ -38,7 +38,7 @@ async function callOpenAI(userText) {
     { role: "system", content: buildStateSummary() },
     {
       role: "user",
-      content: `（先用一句情緒反應，再回內容）
+      content: `（請先用一句情緒反應，再回內容）
 使用者說：${userText}`
     }
   ];
@@ -56,6 +56,7 @@ async function callOpenAI(userText) {
   });
 
   const data = await resp.json();
+
   return (
     data?.output_text ||
     data?.output?.[0]?.content?.[0]?.text ||
@@ -63,7 +64,7 @@ async function callOpenAI(userText) {
   ).slice(0, 800);
 }
 
-// ====== LINE reply ======
+// ====== LINE reply（被動回覆）=====
 async function replyToLine(replyToken, text) {
   await fetch("https://api.line.me/v2/bot/message/reply", {
     method: "POST",
@@ -93,12 +94,12 @@ async function sendPushMessage(userId, text) {
   });
 }
 
-// ====== 延遲型主動回覆（Phase 1 核心）=====
+// ====== 延遲型主動回覆（Phase 1）=====
 function scheduleDelayedFollowUp(userId) {
   const record = userMemory.get(userId);
   if (!record) return;
 
-  // 已主動過就不再來
+  // 一天最多一次主動
   if (record.lastProactiveAt && Date.now() - record.lastProactiveAt < 24 * 60 * 60 * 1000) {
     return;
   }
@@ -113,7 +114,7 @@ function scheduleDelayedFollowUp(userId) {
     const latest = userMemory.get(userId);
     if (!latest) return;
 
-    // 如果他又說話了，就取消
+    // 使用者又說話就取消
     if (Date.now() - latest.lastAt < delay - 1000) return;
 
     const followUps = [
@@ -161,13 +162,15 @@ app.post("/webhook", async (req, res) => {
       lastProactiveAt: userMemory.get(userId)?.lastProactiveAt
     });
 
+    // 產生 AI 回覆
     const aiText = await callOpenAI(userText);
 
-    // 人類延遲
-// 人類延遲（主要回覆）
-const delay = 30000 + Math.random() * 60000; // 30～90 秒
-await sleep(delay);
+    // ====== 真人回覆延遲：10～20 秒 ======
+    const delay = 10000 + Math.random() * 10000;
+    await sleep(delay);
 
+    // 正式回覆
+    await replyToLine(replyToken, aiText);
 
     // 安排延遲型主動
     scheduleDelayedFollowUp(userId);
